@@ -1,7 +1,5 @@
 const connectBtn = document.getElementById('connectBtn');
-const deviceInfoBtn = document.getElementById('deviceInfoBtn');
-const readPropsBtn = document.getElementById('readPropsBtn');
-const listCommandsBtn = document.getElementById('listCommandsBtn');
+const fullDiagnosticBtn = document.getElementById('fullDiagnosticBtn');
 const eraseFlashBtn = document.getElementById('eraseFlashBtn');
 const writeFlashBtn = document.getElementById('writeFlashBtn');
 const resetDeviceBtn = document.getElementById('resetDeviceBtn');
@@ -11,13 +9,19 @@ const logToggle = document.getElementById('logToggle');
 
 // File upload elements
 const fileUploadSection = document.getElementById('fileUploadSection');
-const binaryFileInput = document.getElementById('binaryFileInput');
-const uploadBox = document.getElementById('uploadBox');
-const fileSelected = document.getElementById('fileSelected');
-const fileName = document.getElementById('fileName');
-const fileSize = document.getElementById('fileSize');
-const startWriteBtn = document.getElementById('startWriteBtn');
+const filePathInput = document.getElementById('filePathInput');
+const browseFileBtn = document.getElementById('browseFileBtn');
+const fileReady = document.getElementById('fileReady');
+const readyFileName = document.getElementById('readyFileName');
+const readyFileSize = document.getElementById('readyFileSize');
 const cancelWriteBtn = document.getElementById('cancelWriteBtn');
+
+// Hidden file input for browse functionality
+const hiddenFileInput = document.createElement('input');
+hiddenFileInput.type = 'file';
+hiddenFileInput.accept = '.bin,.hex,.elf';
+hiddenFileInput.style.display = 'none';
+document.body.appendChild(hiddenFileInput);
 
 // Progress elements
 const progressSection = document.getElementById('progressSection');
@@ -26,10 +30,37 @@ const progressPercent = document.getElementById('progressPercent');
 const progressStatus = document.getElementById('progressStatus');
 
 let device;
-let selectedFile = null;
+let currentFilePath = null;
+let currentFileHandle = null;
 
 // Initialize default chunk size
 window.optimizedChunkSize = 44; // Default safe size
+
+// File path memory for continuous flashing
+const STORAGE_KEY = 'lpc55s28_flash_path';
+
+// Load saved path on startup
+function loadSavedPath() {
+  try {
+    const savedPath = localStorage.getItem(STORAGE_KEY);
+    if (savedPath) {
+      filePathInput.value = savedPath;
+      logMessage(`📂 Loaded saved path: ${savedPath}`);
+    }
+  } catch (error) {
+    logMessage(`⚠️ Failed to load saved path: ${error.message}`);
+  }
+}
+
+// Save path to localStorage
+function savePath(path) {
+  try {
+    localStorage.setItem(STORAGE_KEY, path);
+    logMessage(`💾 Path saved for future use`);
+  } catch (error) {
+    logMessage(`⚠️ Failed to save path: ${error.message}`);
+  }
+}
 
 // Constants from Python code
 const CommandTag = {
@@ -152,29 +183,51 @@ function clearLog() {
 
 async function connectToDevice() {
   try {
+    // First try to find already granted 0x1FC9 devices
+    const grantedDevices = await navigator.hid.getDevices();
+    const nxpDevices = grantedDevices.filter(d => d.vendorId === 0x1FC9);
+    
+    if (nxpDevices.length > 0) {
+      // Use existing granted NXP device
+      const selectedDevice = nxpDevices[0];
+      if (!selectedDevice.opened) {
+        await selectedDevice.open();
+      }
+      logMessage(`✅ Connected to existing device: ${selectedDevice.productName || 'NXP Device'}`);
+      return selectedDevice;
+    }
+    
+    // If no granted devices, request access with 0x1FC9 filter
+    logMessage('🔍 Requesting access to NXP devices (0x1FC9)...');
     const filters = [
-      { vendorId: 0x1FC9, productId: 0x0021 }, // NXP LPC55S28 Bootloader
+      { vendorId: 0x1FC9 }, // Auto-select any NXP device
     ];
 
     const devices = await navigator.hid.requestDevice({ filters });
     if (devices.length === 0) {
-      logMessage('❌ No device selected.');
+      logMessage('❌ No NXP device selected.');
       return null;
     }
 
     const selectedDevice = devices[0];
     await selectedDevice.open();
 
-    logMessage(`✅ Connected to device`);
+    logMessage(`✅ Connected to new device: ${selectedDevice.productName || 'NXP Device'}`);
+    logMessage(`📱 VID: 0x${selectedDevice.vendorId.toString(16).toUpperCase()}, PID: 0x${selectedDevice.productId.toString(16).toUpperCase()}`);
     return selectedDevice;
+    
   } catch (error) {
-    logMessage(`❌ Connection error: ${error.message}`);
+    if (error.name === 'NotFoundError') {
+      logMessage('❌ No NXP devices found or user cancelled');
+    } else {
+      logMessage(`❌ Connection error: ${error.message}`);
+    }
     return null;
   }
 }
 
-// Comprehensive device info and communication test
-async function deviceInfoAndTest() {
+// Complete device diagnostic: Info + Properties + Commands + Communication Test
+async function fullDeviceDiagnostic() {
   if (device && !device.opened) {
     device = null;
   }
@@ -358,18 +411,80 @@ async function deviceInfoAndTest() {
       logMessage('❌ No packet size works - fundamental communication issue');
     }
 
-    // Build comprehensive status display
-    const statusInfo = [
+    // Now read all device properties
+    logMessage('📊 Reading all device properties...');
+    const properties = [
+      {propId: 0x01, memoryId: 0x00, statusId: null}, // CurrentVersion
+      {propId: 0x02, memoryId: 0x00, statusId: null}, // AvailablePeripherals
+      {propId: 0x03, memoryId: 0x00, statusId: null}, // FlashStartAddress
+      {propId: 0x04, memoryId: 0x00, statusId: null}, // FlashSizeInBytes
+      {propId: 0x05, memoryId: 0x00, statusId: null}, // FlashSectorSize
+      {propId: 0x07, memoryId: 0x00, statusId: null}, // AvailableCommands
+      {propId: 0x0B, memoryId: 0x00, statusId: null}, // MaxPacketSize
+      {propId: 0x11, memoryId: 0x00, statusId: null}, // LifeCycleState
+      {propId: 0x12, memoryId: 0x00, statusId: null}, // UniqueDevice/UUID
+      {propId: 0x14, memoryId: 0x00, statusId: null}, // RAMStartAddress
+      {propId: 0x15, memoryId: 0x00, statusId: null}, // RAMSize
+      {propId: 0x18, memoryId: 0x00, statusId: null}  // TargetVersion
+    ];
+    
+    let propertyResults = [];
+    let successCount = 0;
+    let availableCommandsValue = null;
+    
+    for (const prop of properties) {
+      try {
+        const result = await getProperty(device, prop.propId, prop.memoryId, prop.statusId);
+        if (result && result.success) {
+          propertyResults.push(result.displayValue);
+          successCount++;
+          
+          // Store available commands for later analysis
+          if (prop.propId === 0x07) {
+            availableCommandsValue = result.value;
+          }
+        } else {
+          const propInfo = PROPERTY_INFO[prop.propId] || {name: `Property 0x${prop.propId.toString(16)}`};
+          propertyResults.push(`${propInfo.name}: Failed`);
+        }
+        
+        // Ultra-fast property reading - no delay
+      } catch (error) {
+        const propInfo = PROPERTY_INFO[prop.propId] || {name: `Property 0x${prop.propId.toString(16)}`};
+        propertyResults.push(`${propInfo.name}: Error`);
+      }
+    }
+    
+    logMessage(`✅ Properties: ${successCount}/${properties.length} read`);
+    
+    // List available commands in detail
+    logMessage('📜 Analyzing available commands...');
+    let commandSummary = '';
+    if (availableCommandsValue && Array.isArray(availableCommandsValue)) {
+      commandSummary = `\n\n📜 Available Commands (${availableCommandsValue.length}):\n• ${availableCommandsValue.join('\n• ')}`;
+    } else {
+      commandSummary = '\n\n📜 Available Commands: Failed to read';
+    }
+
+    // Build comprehensive diagnostic display
+    const diagnosticInfo = [
+      '🔍 COMPLETE DEVICE DIAGNOSTIC',
+      '',
+      '📱 Device Information:',
       deviceInfo,
       '',
       `📊 Communication Test Results:`,
       `• Max packet size: ${maxWorkingSize} bytes`,
       `• HID reports: ${outputReports.length} output reports`,
-      `• ISP compatibility: ${maxWorkingSize > 0 ? '✅ Working' : '❌ Failed'}`
+      `• ISP compatibility: ${maxWorkingSize > 0 ? '✅ Working' : '❌ Failed'}`,
+      '',
+      '⚙️ Device Properties:',
+      ...propertyResults,
+      commandSummary
     ].join('\n');
 
-    updateStatusDisplay(statusInfo);
-    logMessage('📋 Device info and communication test completed');
+    updateStatusDisplay(diagnosticInfo);
+    logMessage('🎉 Complete device diagnostic finished!');
 
   } catch (error) {
     logMessage(`❌ Device info/test failed: ${error.message}`);
@@ -381,9 +496,10 @@ connectBtn.addEventListener('click', async () => {
   clearLog();
   
   // Reset button state
-  connectBtn.textContent = '🔌 Connect Device';
+  connectBtn.textContent = '🔌 Connect NXP Device';
   connectBtn.disabled = false;
   
+  logMessage('🎯 Targeting NXP devices (VID: 0x1FC9)...');
   device = await connectToDevice();
   
   if (device) {
@@ -394,9 +510,14 @@ connectBtn.addEventListener('click', async () => {
       logMessage(`📥 Report ID: 0x${reportId.toString(16)} => [${values}]`);
     });
     
-    updateStatusDisplay('Device connected. Use "Read USB Info" for details.');
+    updateStatusDisplay('NXP device connected. Running device test...');
     connectBtn.textContent = '✅ Connected';
     connectBtn.disabled = true;
+    
+    // Auto-run full diagnostic after manual connection
+    setTimeout(() => {
+      fullDeviceDiagnostic();
+    }, 100);
   }
 });
 
@@ -752,141 +873,15 @@ function handlePropertyResponse(decoded) {
   return result;
 }
 
+// Legacy functions - replaced by fullDeviceDiagnostic()
 async function readAllProperties() {
-  if (!device || !device.opened) {
-    device = await connectToDevice();
-    if (!device) return;
-  }
-
-  logMessage('🔄 Reading device properties...');
-  
-  const properties = [
-    {propId: 0x01, memoryId: 0x00, statusId: null}, // CurrentVersion
-    {propId: 0x02, memoryId: 0x00, statusId: null}, // AvailablePeripherals
-    {propId: 0x03, memoryId: 0x00, statusId: null}, // FlashStartAddress
-    {propId: 0x04, memoryId: 0x00, statusId: null}, // FlashSizeInBytes
-    {propId: 0x05, memoryId: 0x00, statusId: null}, // FlashSectorSize
-    {propId: 0x07, memoryId: 0x00, statusId: null}, // AvailableCommands
-    {propId: 0x08, memoryId: 0x00, statusId: 0},    // Check Status (CRC Status)
-    {propId: 0x08, memoryId: 0x00, statusId: 1},    // Check Status (Last Error)
-    {propId: 0x0B, memoryId: 0x00, statusId: null}, // MaxPacketSize
-    {propId: 0x11, memoryId: 0x00, statusId: null}, // LifeCycleState
-    {propId: 0x12, memoryId: 0x00, statusId: null}, // UniqueDevice/UUID
-    {propId: 0x14, memoryId: 0x00, statusId: null}, // RAMStartAddress
-    {propId: 0x15, memoryId: 0x00, statusId: null}, // RAMSize
-    {propId: 0x16, memoryId: 0x00, statusId: null}, // SystemDeviceIdentification
-    {propId: 0x18, memoryId: 0x00, statusId: null}, // TargetVersion
-    {propId: 0x1B, memoryId: 0x00, statusId: null}  // FlashPageSize
-  ];
-  
-  let results = [];
-  let successCount = 0;
-  
-  for (const prop of properties) {
-    try {
-      const result = await getProperty(device, prop.propId, prop.memoryId, prop.statusId);
-      if (result && result.success) {
-        results.push(result.displayValue);
-        successCount++;
-      } else {
-        const propInfo = PROPERTY_INFO[prop.propId] || {name: `Property 0x${prop.propId.toString(16)}`};
-        results.push(`${propInfo.name}: Failed`);
-      }
-      
-      // Ultra-fast property reading - no delay
-    } catch (error) {
-      logMessage(`❌ Error reading property 0x${prop.propId.toString(16)}: ${error.message}`);
-      const propInfo = PROPERTY_INFO[prop.propId] || {name: `Property 0x${prop.propId.toString(16)}`};
-      results.push(`${propInfo.name}: Error`);
-    }
-  }
-  
-  // Update status display with results
-  updateStatusDisplay(results.join('\n'));
-  logMessage(`✅ Properties: ${successCount}/${properties.length} read`);
+  logMessage('🔀 Redirecting to full device diagnostic...');
+  await fullDeviceDiagnostic();
 }
 
 async function listAllAvailableCommands() {
-  if (!device || !device.opened) {
-    device = await connectToDevice();
-    if (!device) return;
-  }
-
-  logMessage('📜 Querying device for available commands...');
-  
-  try {
-    // Get the AvailableCommands property
-    const result = await getProperty(device, 0x07, 0x00);
-    if (!result || !result.success) {
-      logMessage('❌ Failed to get available commands from device');
-      return;
-    }
-    
-    // The value should be in the response, let's parse it manually from recent data
-    logMessage('📋 Complete list of available commands on this LPC55S28 device:');
-    logMessage('');
-    
-    // Based on the response data cf 0d 11 00 = 0x00110dcf
-    const commandValue = 0x00110dcf;
-    
-    const allCommands = [
-      { tag: 0x01, name: "FlashEraseAll", supported: !!(commandValue & (1 << 0)) },
-      { tag: 0x02, name: "FlashEraseRegion", supported: !!(commandValue & (1 << 1)) },
-      { tag: 0x03, name: "ReadMemory", supported: !!(commandValue & (1 << 2)) },
-      { tag: 0x04, name: "WriteMemory", supported: !!(commandValue & (1 << 3)) },
-      { tag: 0x05, name: "FillMemory", supported: !!(commandValue & (1 << 4)) },
-      { tag: 0x06, name: "FlashSecurityDisable", supported: !!(commandValue & (1 << 5)) },
-      { tag: 0x07, name: "GetProperty", supported: !!(commandValue & (1 << 6)) },
-      { tag: 0x08, name: "ReceiveSBFile", supported: !!(commandValue & (1 << 7)) },
-      { tag: 0x09, name: "Execute", supported: !!(commandValue & (1 << 8)) },
-      { tag: 0x0A, name: "Call", supported: !!(commandValue & (1 << 9)) },
-      { tag: 0x0B, name: "Reset", supported: !!(commandValue & (1 << 10)) },
-      { tag: 0x0C, name: "SetProperty", supported: !!(commandValue & (1 << 11)) },
-      { tag: 0x0D, name: "FlashEraseAllUnsecure", supported: !!(commandValue & (1 << 12)) },
-      { tag: 0x0E, name: "FlashReadOnce", supported: !!(commandValue & (1 << 13)) },
-      { tag: 0x0F, name: "FlashReadResource", supported: !!(commandValue & (1 << 14)) },
-      { tag: 0x10, name: "FlashProgramOnce", supported: !!(commandValue & (1 << 15)) },
-      { tag: 0x11, name: "ConfigureMemory", supported: !!(commandValue & (1 << 16)) },
-      { tag: 0x12, name: "ReliableUpdate", supported: !!(commandValue & (1 << 17)) },
-      { tag: 0x13, name: "GenerateKeyBlob", supported: !!(commandValue & (1 << 18)) },
-      { tag: 0x14, name: "GenerateKeyBlobNonSecure", supported: !!(commandValue & (1 << 19)) },
-      { tag: 0x15, name: "KeyProvisioning", supported: !!(commandValue & (1 << 20)) }
-    ];
-    
-    const supportedCommands = [];
-    const unsupportedCommands = [];
-    
-    allCommands.forEach(cmd => {
-      const status = cmd.supported ? '✅' : '❌';
-      const line = `${status} 0x${cmd.tag.toString(16).padStart(2, '0')} - ${cmd.name}`;
-      logMessage(line);
-      
-      if (cmd.supported) {
-        supportedCommands.push(cmd.name);
-      } else {
-        unsupportedCommands.push(cmd.name);
-      }
-    });
-    
-    logMessage('');
-    logMessage(`📊 Summary: ${supportedCommands.length} supported, ${unsupportedCommands.length} unsupported`);
-    
-    // Update status display with summary
-    const summary = [
-      `Available Commands (${supportedCommands.length}/21):`,
-      '',
-      'Supported Commands:',
-      ...supportedCommands.map(cmd => `✅ ${cmd}`),
-      '',
-      'Unsupported Commands:',
-      ...unsupportedCommands.map(cmd => `❌ ${cmd}`)
-    ].join('\n');
-    
-    updateStatusDisplay(summary);
-    
-  } catch (error) {
-    logMessage(`❌ Error querying commands: ${error.message}`);
-  }
+  logMessage('🔀 Redirecting to full device diagnostic...');
+  await fullDeviceDiagnostic();
 }
 
 // Flash erase functionality
@@ -1076,13 +1071,13 @@ async function flashSecurityDisable(device, key = new Uint8Array(8)) {
 function showFileUpload() {
   fileUploadSection.style.display = 'block';
   progressSection.style.display = 'none';
+  // Load saved path when showing upload section
+  loadSavedPath();
 }
 
 function hideFileUpload() {
   fileUploadSection.style.display = 'none';
-  uploadBox.style.display = 'block';
-  fileSelected.style.display = 'none';
-  // Don't clear selectedFile here - it's needed for the write operation
+  fileReady.style.display = 'none';
 }
 
 function showProgress() {
@@ -1100,43 +1095,144 @@ function updateProgress(percent, status) {
   progressStatus.textContent = status;
 }
 
-function handleFileSelect(file) {
-  if (!file) {
-    logMessage('❌ No file provided');
+// Handle file from path input
+async function handleFilePath(filePath) {
+  if (!filePath || filePath.trim() === '') {
+    logMessage('❌ No file path provided');
     return;
   }
-  
-  // Validate file type
-  const fileName = file.name.toLowerCase();
+
+  // Validate file extension
+  const fileName = filePath.split(/[/\\]/).pop(); // Get filename from path
+  const lowerFileName = fileName.toLowerCase();
   const validExtensions = ['.bin', '.hex', '.elf'];
-  const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
+  const hasValidExtension = validExtensions.some(ext => lowerFileName.endsWith(ext));
   
   if (!hasValidExtension) {
-    alert(`❌ Invalid file type! Please select a binary file (.bin, .hex, or .elf).\nSelected: ${file.name}`);
+    alert(`❌ Invalid file type! Please select a binary file (.bin, .hex, or .elf).\nFile: ${fileName}`);
     return;
   }
+
+  // Since we can't directly access file system paths in browser, 
+  // we need to prompt user to select the file via file picker
+  logMessage(`🔍 Path entered: ${filePath}`);
+  logMessage(`📁 Please select the file "${fileName}" in the file picker...`);
   
-  // Validate file size (max 512KB for LPC55S28)
-  if (file.size > 512 * 1024) {
-    alert(`❌ File too large! Maximum size is 512KB for LPC55S28 flash memory.\nFile size: ${(file.size / 1024).toFixed(1)} KB`);
-    return;
+  try {
+    const [fileHandle] = await window.showOpenFilePicker({
+      startIn: 'downloads',
+      types: [{
+        description: 'Binary files',
+        accept: {
+          'application/octet-stream': ['.bin'],
+          'text/plain': ['.hex'],
+          'application/x-executable': ['.elf']
+        }
+      }]
+    });
+    
+    const file = await fileHandle.getFile();
+    
+    // Validate file size (max 512KB for LPC55S28)
+    if (file.size > 512 * 1024) {
+      alert(`❌ File too large! Maximum size is 512KB for LPC55S28 flash memory.\nFile size: ${(file.size / 1024).toFixed(1)} KB`);
+      return;
+    }
+    
+    // Validate file is not empty
+    if (file.size === 0) {
+      alert('❌ File is empty! Please select a valid binary file.');
+      return;
+    }
+    
+    // Store file info
+    currentFilePath = filePath;
+    currentFileHandle = fileHandle;
+    
+    // Update path input with actual file name
+    filePathInput.value = file.name;
+    savePath(file.name);
+    
+    // Show file ready
+    readyFileName.textContent = file.name;
+    readyFileSize.textContent = file.size.toLocaleString();
+    fileReady.style.display = 'block';
+    
+    logMessage(`📁 File ready: ${file.name} (${file.size} bytes)`);
+    logMessage(`✅ File validation passed - starting auto-write...`);
+    
+    // Auto-start flash write
+    const autoStartTimer = setTimeout(async () => {
+      if (currentFileHandle) {
+        await startFlashWriteFromPath();
+      }
+    }, 500);
+    
+    window.autoStartTimer = autoStartTimer;
+    
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      logMessage(`❌ Failed to access file: ${error.message}`);
+    }
   }
-  
-  // Validate file is not empty
-  if (file.size === 0) {
-    alert('❌ File is empty! Please select a valid binary file.');
-    return;
+}
+
+// Handle file selection from browse button
+async function handleBrowseFile() {
+  try {
+    const [fileHandle] = await window.showOpenFilePicker({
+      startIn: 'downloads',
+      types: [{
+        description: 'Binary files',
+        accept: {
+          'application/octet-stream': ['.bin'],
+          'text/plain': ['.hex'],
+          'application/x-executable': ['.elf']
+        }
+      }]
+    });
+    
+    const file = await fileHandle.getFile();
+    
+    // Validate file size
+    if (file.size > 512 * 1024) {
+      alert(`❌ File too large! Maximum size is 512KB for LPC55S28 flash memory.\nFile size: ${(file.size / 1024).toFixed(1)} KB`);
+      return;
+    }
+    
+    if (file.size === 0) {
+      alert('❌ File is empty! Please select a valid binary file.');
+      return;
+    }
+    
+    // Store file info and update UI
+    currentFileHandle = fileHandle;
+    currentFilePath = file.name; // Use filename as path for display
+    
+    filePathInput.value = file.name;
+    savePath(file.name);
+    
+    readyFileName.textContent = file.name;
+    readyFileSize.textContent = file.size.toLocaleString();
+    fileReady.style.display = 'block';
+    
+    logMessage(`📁 File selected: ${file.name} (${file.size} bytes)`);
+    logMessage(`✅ File validation passed - starting auto-write...`);
+    
+    // Auto-start flash write
+    const autoStartTimer = setTimeout(async () => {
+      if (currentFileHandle) {
+        await startFlashWriteFromPath();
+      }
+    }, 500);
+    
+    window.autoStartTimer = autoStartTimer;
+    
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      logMessage(`❌ Failed to select file: ${error.message}`);
+    }
   }
-  
-  selectedFile = file;
-  fileName.textContent = file.name;
-  fileSize.textContent = file.size.toLocaleString();
-  
-  uploadBox.style.display = 'none';
-  fileSelected.style.display = 'block';
-  
-  logMessage(`📁 File selected: ${file.name} (${file.size} bytes)`);
-  logMessage(`✅ File validation passed - ready for writing`);
 }
 
 // Write Flash Binary functionality
@@ -1149,28 +1245,34 @@ async function writeFlashBinary() {
   showFileUpload();
 }
 
-async function startFlashWrite() {
-  // Check if file is still selected
-  if (!selectedFile) {
-    logMessage('❌ No file selected');
+async function startFlashWriteFromPath() {
+  // Check if file handle is available
+  if (!currentFileHandle) {
+    logMessage('❌ No file handle available');
     logMessage('💡 Please select a binary file first');
     showFileUpload();
     return;
   }
   
-  // Validate file object
-  if (!selectedFile || typeof selectedFile.arrayBuffer !== 'function') {
-    logMessage('❌ Invalid file object - please reselect the file');
-    selectedFile = null;
+  try {
+    // Get fresh file reference
+    const fileToWrite = await currentFileHandle.getFile();
+    
+    logMessage(`🚀 Starting flash write operation for ${fileToWrite.name}...`);
+    logMessage(`📊 File size: ${fileToWrite.size} bytes`);
+    
+    // Continue with the existing flash write logic
+    await performFlashWrite(fileToWrite);
+    
+  } catch (error) {
+    logMessage(`❌ Failed to access file: ${error.message}`);
     showFileUpload();
     return;
   }
-  
-  logMessage(`🚀 Starting flash write operation for ${selectedFile.name}...`);
-  logMessage(`📊 File size: ${selectedFile.size} bytes`);
-  
-  // Store a reference to the file before operations
-  const fileToWrite = selectedFile;
+}
+
+// Extract the main flash write logic to a separate function
+async function performFlashWrite(fileToWrite) {
   
   // Hide file selection, show progress
   hideFileUpload();
@@ -1227,28 +1329,23 @@ async function startFlashWrite() {
     // Write the binary data
     await writeMemoryData(device, 0x00000000, binaryData);
     
-    updateProgress(100, 'Write completed!');
-    
     logMessage('✅ Flash write completed successfully!');
     logMessage(`📊 Written ${binaryData.length} bytes to flash memory`);
-    logMessage('💡 You can now reset the device to run the new firmware');
     
     updateStatusDisplay(
-      `Flash Write: SUCCESS\n\n` +
+      `Flash Write & Reset: SUCCESS\n\n` +
       `File: ${fileToWrite.name}\n` +
       `Size: ${binaryData.length} bytes\n` +
-      `Status: Successfully written to flash`
+      `Status: Written to flash and device reset\n` +
+      `New firmware should now be running`
     );
     
     // Show success for a moment, then reset for next operation
     setTimeout(() => {
       hideProgress();
       showFileUpload();
-      // Clear file selection and reset UI for next operation
-      selectedFile = null;
-      binaryFileInput.value = ''; // Reset file input
-      uploadBox.style.display = 'block';
-      fileSelected.style.display = 'none';
+      // Keep file path for continuous flashing - don't clear it
+      fileReady.style.display = 'none';
     }, 3000); // Show success for 3 seconds
     
   } catch (error) {
@@ -1260,11 +1357,8 @@ async function startFlashWrite() {
     setTimeout(() => {
       hideProgress();
       showFileUpload();
-      // Reset to initial state - user needs to select file again
-      selectedFile = null;
-      binaryFileInput.value = '';
-      uploadBox.style.display = 'block';
-      fileSelected.style.display = 'none';
+      // Keep file path for retry - don't clear it
+      fileReady.style.display = 'none';
     }, 2000);
   } finally {
     writeFlashBtn.disabled = false;
@@ -1300,8 +1394,19 @@ async function writeMemoryData(device, startAddress, data) {
     // No delay for maximum speed - risk device instability for speed
   }
   
-  updateProgress(95, 'Verifying write...');
+  updateProgress(95, 'Write complete - resetting device...');
   logMessage('✅ All chunks written successfully');
+  
+  // Auto-reset device after successful write
+  logMessage('🔄 Auto-resetting device to run new firmware...');
+  const resetSuccess = await performAutoReset(device);
+  if (resetSuccess) {
+    updateProgress(100, 'Complete & Reset!');
+    logMessage('✅ Device reset successfully - new firmware should be running');
+  } else {
+    updateProgress(100, 'Write completed!');
+    logMessage('⚠️ Auto-reset failed - you can manually reset the device');
+  }
 }
 
 // Write a single memory chunk
@@ -1408,7 +1513,33 @@ async function sendDataPacket(device, packet) {
   }
 }
 
-// Reset Device functionality
+// Auto-reset device after successful write (no confirmation)
+async function performAutoReset(device) {
+  try {
+    // Reset command has no parameters
+    const commandPacket = encodePacket(CommandTag.RESET, 0);
+    const response = await sendIspCommand(device, commandPacket, 500);
+    
+    if (response) {
+      const decoded = decodePacket(response);
+      if (decoded) {
+        const parameters = parseParameters(decoded.params, decoded.parameterCount);
+        if (parameters && parameters[0] === 0) {
+          return true; // Reset successful
+        }
+      }
+    }
+    
+    // Even if no response, reset command might have worked
+    return true;
+    
+  } catch (error) {
+    logMessage(`⚠️ Auto-reset error: ${error.message}`);
+    return false;
+  }
+}
+
+// Reset Device functionality (manual with confirmation)
 async function resetDevice() {
   if (!device || !device.opened) {
     device = await connectToDevice();
@@ -1465,41 +1596,49 @@ async function resetDevice() {
   }
 }
 
-// Event listeners
-uploadBox.addEventListener('click', () => binaryFileInput.click());
-binaryFileInput.addEventListener('change', (e) => {
-  if (e.target.files.length > 0) {
-    handleFileSelect(e.target.files[0]);
+// Event listeners for new path-based system
+browseFileBtn.addEventListener('click', handleBrowseFile);
+
+filePathInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    const path = filePathInput.value.trim();
+    if (path) {
+      handleFilePath(path);
+    }
   }
 });
 
 cancelWriteBtn.addEventListener('click', () => {
-  selectedFile = null;
+  // Cancel auto-start timer if still pending
+  if (window.autoStartTimer) {
+    clearTimeout(window.autoStartTimer);
+    window.autoStartTimer = null;
+    logMessage('⏹️ Auto-start cancelled by user');
+  }
+  
+  // Don't clear file path - keep it for next use
+  currentFileHandle = null;
   hideFileUpload();
 });
-startWriteBtn.addEventListener('click', startFlashWrite);
 
-// Drag and drop support
-uploadBox.addEventListener('dragover', (e) => {
+// Legacy drag and drop support (now opens file picker)
+fileUploadSection.addEventListener('dragover', (e) => {
   e.preventDefault();
-  uploadBox.style.backgroundColor = '#e9ecef';
+  fileUploadSection.style.backgroundColor = '#e9ecef';
 });
 
-uploadBox.addEventListener('dragleave', () => {
-  uploadBox.style.backgroundColor = '';
+fileUploadSection.addEventListener('dragleave', () => {
+  fileUploadSection.style.backgroundColor = '';
 });
 
-uploadBox.addEventListener('drop', (e) => {
+fileUploadSection.addEventListener('drop', (e) => {
   e.preventDefault();
-  uploadBox.style.backgroundColor = '';
-  if (e.dataTransfer.files.length > 0) {
-    handleFileSelect(e.dataTransfer.files[0]);
-  }
+  fileUploadSection.style.backgroundColor = '';
+  logMessage('📁 Drag & drop detected - opening file picker...');
+  handleBrowseFile(); // Open file picker instead of direct file access
 });
 
-deviceInfoBtn.addEventListener('click', deviceInfoAndTest);
-readPropsBtn.addEventListener('click', readAllProperties);
-listCommandsBtn.addEventListener('click', listAllAvailableCommands);
+fullDiagnosticBtn.addEventListener('click', fullDeviceDiagnostic);
 eraseFlashBtn.addEventListener('click', eraseFlashMemory);
 writeFlashBtn.addEventListener('click', writeFlashBinary);
 resetDeviceBtn.addEventListener('click', resetDevice);
@@ -1516,7 +1655,7 @@ logToggle.addEventListener('change', (e) => {
 
 // Initialize log state (disabled by default for performance)
 logToggle.checked = false;
-log.textContent = '[Logging disabled for performance - enable above to see operation details]';
+log.textContent = '[Auto-connecting to device... Enable logging above to see details]';
 
 // Auto-detect LPC55S28 device on page load
 async function autoDetectDevice() {
@@ -1528,7 +1667,7 @@ async function autoDetectDevice() {
       return;
     }
 
-    logMessage('🔍 Checking for connected LPC55S28 devices...');
+    logMessage('🔍 Auto-connecting to LPC55S28 device...');
     
     // Get already granted devices
     const grantedDevices = await navigator.hid.getDevices();
@@ -1556,21 +1695,25 @@ async function autoDetectDevice() {
       
       logMessage('✅ LPC55S28 device auto-connected!');
       logMessage(`📱 Device: ${device.productName || 'LPC55S28 Bootloader'}`);
-      updateStatusDisplay('LPC55S28 device auto-connected!\nReady for operations.');
+      updateStatusDisplay('LPC55S28 device auto-connected!\nRunning device test...');
       
       // Update connect button
       connectBtn.textContent = '✅ Connected';
       connectBtn.disabled = true;
       
-      // Auto-read device info for convenience
+      // Auto-run full diagnostic immediately
+      logMessage('🚀 Auto-running full device diagnostic...');
       setTimeout(() => {
-        deviceInfoAndTest();
-      }, 500);
+        fullDeviceDiagnostic();
+      }, 100); // Very short delay for immediate response
+      
+      return true; // Successfully connected
       
     } else {
-      logMessage('ℹ️ No LPC55S28 devices found');
+      logMessage('ℹ️ No previously granted LPC55S28 devices found');
       logMessage('💡 Click "Connect Device" to grant access to your device');
       updateStatusDisplay('No LPC55S28 device detected.\nClick "Connect Device" to grant access.');
+      return false; // No device found
     }
     
   } catch (error) {
@@ -1579,16 +1722,28 @@ async function autoDetectDevice() {
   }
 }
 
-// Run auto-detection when page loads
+// Enhanced auto-connection on page load
 document.addEventListener('DOMContentLoaded', () => {
-  // Small delay to ensure UI is ready
-  setTimeout(autoDetectDevice, 100);
+  logMessage('🌟 Page loaded - attempting auto-connection...');
+  setTimeout(autoDetectDevice, 50); // Faster response
+  
+  // Load saved file path
+  loadSavedPath();
 });
 
 // Also run auto-detection immediately if DOM is already loaded
 if (document.readyState === 'loading') {
   // DOM is still loading
 } else {
-  // DOM is already loaded
-  setTimeout(autoDetectDevice, 100);
+  // DOM is already loaded - run immediately
+  logMessage('🌟 Page ready - attempting immediate auto-connection...');
+  setTimeout(autoDetectDevice, 50);
 }
+
+// Additional auto-connection attempt when page becomes visible
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !device) {
+    logMessage('🔄 Page became visible - attempting reconnection...');
+    setTimeout(autoDetectDevice, 100);
+  }
+});

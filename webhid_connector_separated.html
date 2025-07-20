@@ -75,6 +75,15 @@
       border-radius: 8px;
       background-color: #f8f9fa;
     }
+    .path-input-group {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .path-input-section h4 {
+      margin: 0 0 1rem 0;
+      color: #333;
+    }
     .upload-box {
       text-align: center;
       padding: 2rem;
@@ -222,7 +231,7 @@
     
     <div class="info-box">
       <h3>📋 Supported Features</h3>
-      <p>• Connect to NXP LPC55S28 Bootloader device (VID:0x1FC9 PID:0x0021)<br>
+      <p>• Auto-connect to NXP devices (VID:0x1FC9) - no device selection needed<br>
          • Read USB device detailed information<br>
          • Read all device properties and configuration<br>
          • Real-time device input report monitoring<br>
@@ -234,10 +243,8 @@
     </div>
 
     <div class="button-group">
-      <button id="connectBtn">🔌 Connect Device</button>
-      <button id="deviceInfoBtn">📋 Device Info & Test</button>
-      <button id="readPropsBtn">⚙️ Read All Properties</button>
-      <button id="listCommandsBtn">📜 List All Commands</button>
+      <button id="connectBtn">🔌 Connect NXP Device</button>
+      <button id="fullDiagnosticBtn">🔍 Full Device Diagnostic</button>
       <button id="eraseFlashBtn" class="danger-btn">🗑️ Erase Flash</button>
       <button id="writeFlashBtn" class="primary-btn">📤 Write Flash Binary</button>
       <button id="resetDeviceBtn" class="secondary-btn">🔄 Reset Device</button>
@@ -245,16 +252,23 @@
 
     <div class="file-upload-section" id="fileUploadSection" style="display: none;">
       <div class="upload-area">
-        <input type="file" id="binaryFileInput" accept=".bin,.hex,.elf" style="display: none;">
-        <div class="upload-box" id="uploadBox">
-          <p>📁 Click to select binary file or drag & drop</p>
-          <p class="file-info">Supported formats: .bin, .hex, .elf</p>
+        <div class="path-input-section">
+          <h4>📂 Binary File Path</h4>
+          <div class="path-input-group">
+            <input type="text" id="filePathInput" placeholder="Enter full path to binary file (e.g., C:\path\to\file.bin)" 
+                   style="flex: 1; padding: 0.75rem; font-size: 1rem; border: 2px solid #007acc; border-radius: 5px; margin-right: 0.5rem;">
+            <button id="browseFileBtn" style="padding: 0.75rem 1rem; background-color: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">📁 Browse</button>
+          </div>
+          <div class="path-info" style="margin-top: 0.5rem;">
+            <p class="file-info">Supported formats: .bin, .hex, .elf</p>
+            <p class="file-info" style="color: #007acc; font-weight: bold;">⚡ Auto-starts after path input</p>
+          </div>
         </div>
-        <div class="file-selected" id="fileSelected" style="display: none;">
-          <p>✅ File selected: <span id="fileName"></span></p>
-          <p>📊 Size: <span id="fileSize"></span> bytes</p>
-          <button id="startWriteBtn" class="primary-btn">🚀 Start Writing</button>
-          <button id="cancelWriteBtn">❌ Cancel</button>
+        <div class="file-ready" id="fileReady" style="display: none; text-align: center; padding: 1rem;">
+          <p>✅ File ready: <span id="readyFileName"></span></p>
+          <p>📊 Size: <span id="readyFileSize"></span> bytes</p>
+          <p style="color: #28a745; font-weight: bold;">⚡ Auto-starting flash write...</p>
+          <button id="cancelWriteBtn" style="margin-top: 0.5rem;">❌ Cancel</button>
         </div>
       </div>
     </div>
@@ -274,7 +288,7 @@
     <div class="content-area">
       <div class="status-panel">
         <h3>📊 Device Status & Properties</h3>
-        <div id="statusDisplay">No device connected. Click "Connect Device" to start.</div>
+        <div id="statusDisplay">Auto-connecting to LPC55S28 device...</div>
       </div>
 
       <div class="log-panel">
