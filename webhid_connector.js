@@ -8,13 +8,8 @@ const statusDisplay = document.getElementById('statusDisplay');
 const logToggle = document.getElementById('logToggle');
 
 // File upload elements
-const fileUploadSection = document.getElementById('fileUploadSection');
 const filePathInput = document.getElementById('filePathInput');
 const browseFileBtn = document.getElementById('browseFileBtn');
-const fileReady = document.getElementById('fileReady');
-const readyFileName = document.getElementById('readyFileName');
-const readyFileSize = document.getElementById('readyFileSize');
-const cancelWriteBtn = document.getElementById('cancelWriteBtn');
 
 // Hidden file input for browse functionality
 const hiddenFileInput = document.createElement('input');
@@ -24,7 +19,6 @@ hiddenFileInput.style.display = 'none';
 document.body.appendChild(hiddenFileInput);
 
 // Progress elements
-const progressSection = document.getElementById('progressSection');
 const progressFill = document.getElementById('progressFill');
 const progressPercent = document.getElementById('progressPercent');
 const progressStatus = document.getElementById('progressStatus');
@@ -38,27 +32,175 @@ window.optimizedChunkSize = 44; // Default safe size
 
 // File path memory for continuous flashing
 const STORAGE_KEY = 'lpc55s28_flash_path';
+const STORAGE_KEY_DIRECTORY = 'lpc55s28_flash_directory';
+const STORAGE_KEY_FULL_PATH = 'lpc55s28_full_path';
+const STORAGE_KEY_FILE_INFO = 'lpc55s28_file_info';
 
-// Load saved path on startup
+// Load saved path on startup with enhanced file info
 function loadSavedPath() {
   try {
     const savedPath = localStorage.getItem(STORAGE_KEY);
-    if (savedPath) {
-      filePathInput.value = savedPath;
-      logMessage(`📂 Loaded saved path: ${savedPath}`);
+    const savedDir = localStorage.getItem(STORAGE_KEY_DIRECTORY);
+    const savedFullPath = localStorage.getItem(STORAGE_KEY_FULL_PATH);
+    const savedFileInfo = localStorage.getItem(STORAGE_KEY_FILE_INFO);
+    
+    let pathToDisplay = savedPath;
+    
+    // Use full path if available
+    if (savedFullPath) {
+      pathToDisplay = savedFullPath;
+      filePathInput.value = savedFullPath;
+      logMessage(`📂 Loaded saved full path: ${savedFullPath}`);
+    } else if (savedPath) {
+      // If we have a directory hint, combine it with filename
+      if (savedDir && !savedPath.includes('/') && !savedPath.includes('\\')) {
+        const suggestedPath = savedDir.endsWith('/') || savedDir.endsWith('\\') ? 
+          savedDir + savedPath : savedDir + '/' + savedPath;
+        filePathInput.value = suggestedPath;
+        pathToDisplay = suggestedPath;
+        logMessage(`📂 Loaded suggested path: ${suggestedPath}`);
+      } else {
+        filePathInput.value = savedPath;
+        if (savedPath.includes('/') || savedPath.includes('\\')) {
+          logMessage(`📂 Loaded saved full path: ${savedPath}`);
+        } else {
+          logMessage(`📂 Loaded saved filename: ${savedPath}`);
+          logMessage(`💡 Tip: Edit to add full path (e.g., C:\\Projects\\${savedPath}) for better path memory`);
+        }
+      }
+    }
+    
+    // Display file info if available
+    if (savedFileInfo) {
+      try {
+        const fileInfo = JSON.parse(savedFileInfo);
+        const timeSince = Math.round((Date.now() - fileInfo.timestamp) / 1000 / 60);
+        logMessage(`📋 Previous file: ${fileInfo.name} (${fileInfo.size} bytes, ${timeSince} min ago)`);
+        logMessage(`🚀 Ready for continuous programming - click Start Programming to use saved file`);
+      } catch (error) {
+        // Invalid file info, ignore
+      }
+    }
+    
+    if (pathToDisplay) {
+      logMessage(`💡 Tip: Click Start Programming to auto-reload the file, or Browse to select a new one`);
     }
   } catch (error) {
     logMessage(`⚠️ Failed to load saved path: ${error.message}`);
   }
 }
 
-// Save path to localStorage
-function savePath(path) {
+// Save path to localStorage with enhanced file information
+function savePath(filename, fullPath = null, fileHandle = null, fileSize = null) {
   try {
-    localStorage.setItem(STORAGE_KEY, path);
-    logMessage(`💾 Path saved for future use`);
+    // Save filename
+    localStorage.setItem(STORAGE_KEY, filename);
+    
+    // Save full path if provided
+    if (fullPath) {
+      localStorage.setItem(STORAGE_KEY_FULL_PATH, fullPath);
+      const lastSlash = Math.max(fullPath.lastIndexOf('/'), fullPath.lastIndexOf('\\'));
+      if (lastSlash > 0) {
+        const directory = fullPath.substring(0, lastSlash + 1);
+        localStorage.setItem(STORAGE_KEY_DIRECTORY, directory);
+      }
+    }
+    
+    // Save file information for validation
+    if (fileSize !== null) {
+      const fileInfo = {
+        name: filename,
+        size: fileSize,
+        timestamp: Date.now(),
+        fullPath: fullPath
+      };
+      localStorage.setItem(STORAGE_KEY_FILE_INFO, JSON.stringify(fileInfo));
+      logMessage(`💾 Complete file info saved for continuous programming`);
+    } else {
+      logMessage(`💾 Path saved for future use`);
+    }
   } catch (error) {
     logMessage(`⚠️ Failed to save path: ${error.message}`);
+  }
+}
+
+// Smart file reloading for continuous programming
+async function tryReloadSavedFile() {
+  try {
+    const savedFileInfo = localStorage.getItem(STORAGE_KEY_FILE_INFO);
+    if (!savedFileInfo) {
+      return false;
+    }
+    
+    const fileInfo = JSON.parse(savedFileInfo);
+    const savedPath = fileInfo.fullPath || fileInfo.name;
+    
+    // Check if we still have a valid file handle for this file
+    if (currentFileHandle) {
+      try {
+        const file = await currentFileHandle.getFile();
+        if (file.name === fileInfo.name && file.size === fileInfo.size) {
+          logCritical(`🔄 Using previously selected file: ${file.name}`);
+          return true; // File handle is still valid
+        }
+      } catch (error) {
+        // File handle is no longer valid, clear it
+        currentFileHandle = null;
+      }
+    }
+    
+    // If path input matches saved path, assume user wants to use the same file
+    const currentPath = filePathInput.value.trim();
+    if (currentPath && (currentPath === savedPath || currentPath === fileInfo.name)) {
+      logCritical(`📂 Attempting to reload file from saved path: ${currentPath}`);
+      
+      // Try to prompt user to re-select the same file
+      try {
+        const [fileHandle] = await window.showOpenFilePicker({
+          startIn: 'downloads',
+          types: [{
+            description: 'Binary files',
+            accept: {
+              'application/octet-stream': ['.bin'],
+              'text/plain': ['.hex'],
+              'application/x-executable': ['.elf']
+            }
+          }]
+        });
+        
+        const file = await fileHandle.getFile();
+        
+        // Validate it's the expected file
+        if (file.name === fileInfo.name) {
+          currentFileHandle = fileHandle;
+          // Update the path input to show the full path if available
+          if (currentPath !== file.name) {
+            filePathInput.value = currentPath;
+          }
+          logCritical(`✅ Successfully reloaded: ${file.name} (${file.size} bytes)`);
+          return true;
+        } else {
+          logCritical(`⚠️ Selected different file: ${file.name} (expected: ${fileInfo.name})`);
+          // Update with new file
+          currentFileHandle = fileHandle;
+          if (currentPath !== file.name) {
+            filePathInput.value = currentPath;
+          }
+          savePath(file.name, currentPath, fileHandle, file.size);
+          return true;
+        }
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          logCritical(`❌ Failed to reload file: ${error.message}`);
+        }
+        return false;
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    logCritical(`❌ Error during file reload: ${error.message}`);
+    return false;
   }
 }
 
@@ -160,12 +302,77 @@ const STATUS_CODES = {
   10001: "kStatus_SecurityViolation: Security violation happened when receiving disallowed commands"
 };
 
+// High-performance logging system with flash programming optimization
+let logQueue = [];
+let logProcessing = false;
+let flashProgrammingActive = false; // Critical flag to disable all logging during flash programming
+
 function logMessage(msg) {
+  // Completely skip logging during flash programming for maximum speed
+  if (flashProgrammingActive) {
+    return; // No logging overhead at all during critical operations
+  }
+  
   // Only log if toggle is enabled for performance
   if (logToggle && logToggle.checked) {
     const timestamp = new Date().toLocaleTimeString();
-    log.textContent += `\n[${timestamp}] ${msg}`;
-    log.scrollTop = log.scrollHeight;
+    const logEntry = `[${timestamp}] ${msg}`;
+    
+    // Add to queue for async processing
+    logQueue.push(logEntry);
+    
+    // Process queue asynchronously to avoid blocking
+    if (!logProcessing) {
+      processLogQueue();
+    }
+  }
+}
+
+// Critical logging function for essential messages that bypass flash programming restrictions
+function logCritical(msg) {
+  if (logToggle && logToggle.checked) {
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = `[${timestamp}] ${msg}`;
+    logQueue.push(logEntry);
+    
+    if (!logProcessing) {
+      processLogQueue();
+    }
+  }
+}
+
+async function processLogQueue() {
+  if (logProcessing) return;
+  logProcessing = true;
+  
+  try {
+    // Process in small batches to avoid blocking
+    while (logQueue.length > 0) {
+      const batch = logQueue.splice(0, 10); // Process 10 entries at a time
+      
+      // Use requestAnimationFrame for smooth UI updates
+      await new Promise(resolve => {
+        requestAnimationFrame(() => {
+          batch.forEach(entry => {
+            log.textContent += `\n${entry}`;
+          });
+          
+          // Throttle scrolling to reduce UI impact
+          if (logQueue.length === 0 || logQueue.length % 50 === 0) {
+            log.scrollTop = log.scrollHeight;
+          }
+          
+          resolve();
+        });
+      });
+      
+      // Small yield to prevent blocking
+      if (logQueue.length > 0) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+  } finally {
+    logProcessing = false;
   }
 }
 
@@ -173,16 +380,42 @@ function updateStatusDisplay(message) {
   statusDisplay.textContent = message;
 }
 
-function clearLog() {
-  if (logToggle && logToggle.checked) {
-    log.textContent = '[Log output will appear here]';
+// Update UI button states based on device connection
+function updateButtonStates() {
+  const isConnected = device && device.opened;
+  
+  // Enable/disable programming-related buttons based on connection
+  writeFlashBtn.disabled = !isConnected;
+  eraseFlashBtn.disabled = !isConnected;
+  resetDeviceBtn.disabled = !isConnected;
+  fullDiagnosticBtn.disabled = !isConnected;
+  
+  // Update button text to indicate connection requirement
+  if (!isConnected) {
+    writeFlashBtn.textContent = '🔌 Connect Device First';
+    writeFlashBtn.style.backgroundColor = '#6c757d';
   } else {
-    log.textContent = '[Logging disabled for performance - enable above to see operation details]';
+    writeFlashBtn.textContent = '🚀 Start Programming';
+    writeFlashBtn.style.backgroundColor = '#28a745';
   }
 }
 
+function clearLog() {
+  // Clear log queue first
+  logQueue.length = 0;
+  
+  // Use requestAnimationFrame for non-blocking UI update
+  requestAnimationFrame(() => {
+    if (logToggle && logToggle.checked) {
+      log.textContent = '[Log output will appear here]';
+    } else {
+      log.textContent = '[Logging disabled for performance - enable above to see operation details]';
+    }
+  });
+}
+
 async function connectToDevice() {
-  try {
+  return await withRetry(async () => {
     // First try to find already granted 0x1FC9 devices
     const grantedDevices = await navigator.hid.getDevices();
     const nxpDevices = grantedDevices.filter(d => d.vendorId === 0x1FC9);
@@ -194,6 +427,7 @@ async function connectToDevice() {
         await selectedDevice.open();
       }
       logMessage(`✅ Connected to existing device: ${selectedDevice.productName || 'NXP Device'}`);
+      updateButtonStates(); // Update button states when connected
       return selectedDevice;
     }
     
@@ -214,16 +448,9 @@ async function connectToDevice() {
 
     logMessage(`✅ Connected to new device: ${selectedDevice.productName || 'NXP Device'}`);
     logMessage(`📱 VID: 0x${selectedDevice.vendorId.toString(16).toUpperCase()}, PID: 0x${selectedDevice.productId.toString(16).toUpperCase()}`);
+    updateButtonStates(); // Update button states when connected
     return selectedDevice;
-    
-  } catch (error) {
-    if (error.name === 'NotFoundError') {
-      logMessage('❌ No NXP devices found or user cancelled');
-    } else {
-      logMessage(`❌ Connection error: ${error.message}`);
-    }
-    return null;
-  }
+  }, 2, 200, 'Device connection');
 }
 
 // Complete device diagnostic: Info + Properties + Commands + Communication Test
@@ -511,8 +738,11 @@ connectBtn.addEventListener('click', async () => {
     });
     
     updateStatusDisplay('NXP device connected. Running device test...');
-    connectBtn.textContent = '✅ Connected';
-    connectBtn.disabled = true;
+    connectBtn.textContent = '🔄 Re-Connect';
+    connectBtn.disabled = false;
+    
+    // Update button states now that device is connected
+    updateButtonStates();
     
     // Auto-run full diagnostic after manual connection
     setTimeout(() => {
@@ -649,10 +879,49 @@ function parseCommands(value) {
   return supported.length > 0 ? supported : ['None'];
 }
 
+// HID communication retry mechanism
+let bulkOperationMode = false; // Flag to suppress verbose logging during bulk operations
+
+async function withRetry(operation, maxRetries = 3, delayMs = 100, operationName = 'HID operation', suppressLogs = false) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await operation();
+      if (attempt > 1) {
+        // Always log retry success during flash programming as it's critical info
+        if (flashProgrammingActive) {
+          logCritical(`✅ ${operationName} succeeded on attempt ${attempt}`);
+        } else if (!suppressLogs && !bulkOperationMode) {
+          logMessage(`✅ ${operationName} succeeded on attempt ${attempt}`);
+        }
+      }
+      return result;
+    } catch (error) {
+      if (attempt === maxRetries) {
+        // Always log final failure during flash programming as it's critical
+        if (flashProgrammingActive) {
+          logCritical(`❌ ${operationName} failed after ${maxRetries} attempts: ${error.message}`);
+        } else if (!suppressLogs && !bulkOperationMode) {
+          logMessage(`❌ ${operationName} failed after ${maxRetries} attempts: ${error.message}`);
+        }
+        throw error;
+      } else {
+        // Always log retry attempts during flash programming as they indicate problems
+        if (flashProgrammingActive) {
+          logCritical(`⚠️ ${operationName} attempt ${attempt} failed: ${error.message}, retrying...`);
+        } else if (!suppressLogs && !bulkOperationMode) {
+          logMessage(`⚠️ ${operationName} attempt ${attempt} failed: ${error.message}, retrying...`);
+        }
+        await new Promise(resolve => setTimeout(resolve, delayMs * attempt)); // Exponential backoff
+      }
+    }
+  }
+}
+
 async function sendIspCommand(device, commandPacket, timeout = 3000) {
-  try {
+  const reportId = commandPacket[0];
+  
+  return await withRetry(async () => {
     // Extract the report ID and data
-    const reportId = commandPacket[0];
     const dataToSend = commandPacket.slice(1); // Remove first byte (report ID)
     
     // Check if device is still open
@@ -694,24 +963,7 @@ async function sendIspCommand(device, commandPacket, timeout = 3000) {
       
       device.addEventListener('inputreport', handleInputReport);
     });
-  } catch (error) {
-    logMessage(`❌ Error sending command: ${error.message}`);
-    
-    // Enhanced error diagnostics
-    if (error.message.includes('Failed to write')) {
-      logMessage('🔍 Detailed error analysis:');
-      logMessage(`   Device opened: ${device?.opened || false}`);
-      logMessage(`   Report ID: 0x${commandPacket[0]?.toString(16) || '??'}`);
-      logMessage(`   Data length: ${commandPacket.length - 1}`);
-      logMessage('💡 Possible solutions:');
-      logMessage('   1. Device may be in use by another application');
-      logMessage('   2. Try a different browser (Chrome/Edge recommended)');
-      logMessage('   3. Check device permissions in browser settings');
-      logMessage('   4. Reconnect the USB device');
-    }
-    
-    return null;
-  }
+  }, 3, 100, `ISP Command 0x${reportId.toString(16)}`);
 }
 
 // Legacy functions removed - functionality integrated into deviceInfoAndTest()
@@ -1069,23 +1321,21 @@ async function flashSecurityDisable(device, key = new Uint8Array(8)) {
 
 // File upload handling
 function showFileUpload() {
-  fileUploadSection.style.display = 'block';
-  progressSection.style.display = 'none';
+  // No longer needed - file path input is always visible
   // Load saved path when showing upload section
   loadSavedPath();
 }
 
 function hideFileUpload() {
-  fileUploadSection.style.display = 'none';
-  fileReady.style.display = 'none';
+  // No longer needed - file path input is always visible
 }
 
 function showProgress() {
-  progressSection.style.display = 'block';
+  // Progress section is always visible now
 }
 
 function hideProgress() {
-  progressSection.style.display = 'none';
+  // Progress section is always visible - just reset values
   updateProgress(0, 'Ready');
 }
 
@@ -1149,26 +1399,38 @@ async function handleFilePath(filePath) {
     currentFilePath = filePath;
     currentFileHandle = fileHandle;
     
-    // Update path input with actual file name
-    filePathInput.value = file.name;
-    savePath(file.name);
+    // Try to preserve or reconstruct the full path for handleFilePath
+    const currentInputValue = filePathInput.value.trim();
+    const hasUserPath = currentInputValue && currentInputValue !== file.name && 
+                       (currentInputValue.includes('/') || currentInputValue.includes('\\'));
     
-    // Show file ready
-    readyFileName.textContent = file.name;
-    readyFileSize.textContent = file.size.toLocaleString();
-    fileReady.style.display = 'block';
+    let finalPath;
+    let fullPath = null;
     
-    logMessage(`📁 File ready: ${file.name} (${file.size} bytes)`);
-    logMessage(`✅ File validation passed - starting auto-write...`);
-    
-    // Auto-start flash write
-    const autoStartTimer = setTimeout(async () => {
-      if (currentFileHandle) {
-        await startFlashWriteFromPath();
+    if (hasUserPath) {
+      // User has entered a full path, save it with the new filename
+      const lastSlash = Math.max(currentInputValue.lastIndexOf('/'), currentInputValue.lastIndexOf('\\'));
+      if (lastSlash > 0) {
+        const directory = currentInputValue.substring(0, lastSlash + 1);
+        fullPath = directory + file.name;
+        finalPath = fullPath;
+        logMessage(`📁 Updated path: ${fullPath}`);
+      } else {
+        finalPath = file.name;
       }
-    }, 500);
+    } else {
+      // Use the original filePath parameter as the basis
+      finalPath = filePath;
+      fullPath = filePath;
+      logMessage(`📁 Using entered path: ${filePath}`);
+    }
     
-    window.autoStartTimer = autoStartTimer;
+    filePathInput.value = finalPath;
+    savePath(file.name, fullPath, fileHandle, file.size);
+    
+    // File ready
+    logMessage(`📁 File ready: ${file.name} (${file.size} bytes)`);
+    logMessage(`✅ File ready for programming - click Start Programming to begin`);
     
   } catch (error) {
     if (error.name !== 'AbortError') {
@@ -1209,24 +1471,59 @@ async function handleBrowseFile() {
     currentFileHandle = fileHandle;
     currentFilePath = file.name; // Use filename as path for display
     
-    filePathInput.value = file.name;
-    savePath(file.name);
+    // Enhanced path handling for better user experience
+    const currentInputValue = filePathInput.value.trim();
+    const hasUserPath = currentInputValue && currentInputValue !== file.name && 
+                       (currentInputValue.includes('/') || currentInputValue.includes('\\'));
     
-    readyFileName.textContent = file.name;
-    readyFileSize.textContent = file.size.toLocaleString();
-    fileReady.style.display = 'block';
+    let finalPath;
+    let fullPath = null;
+    
+    if (hasUserPath) {
+      // User has entered a full path, save it with the new filename
+      const lastSlash = Math.max(currentInputValue.lastIndexOf('/'), currentInputValue.lastIndexOf('\\'));
+      if (lastSlash > 0) {
+        const directory = currentInputValue.substring(0, lastSlash + 1);
+        fullPath = directory + file.name;
+        finalPath = fullPath;
+        logMessage(`📁 Updated path: ${fullPath}`);
+      } else {
+        finalPath = file.name;
+      }
+    } else {
+      // Try to use saved directory from previous sessions
+      const savedDir = localStorage.getItem(STORAGE_KEY_DIRECTORY);
+      if (savedDir) {
+        const separator = savedDir.endsWith('/') || savedDir.endsWith('\\') ? '' : '/';
+        fullPath = savedDir + separator + file.name;
+        finalPath = fullPath;
+        logMessage(`📁 Using saved directory: ${fullPath}`);
+      } else {
+        // Prompt user to provide a full path for better experience
+        setTimeout(() => {
+          const userPath = prompt(
+            `📂 To remember the file location for next time, please enter the full path:\n\nSelected file: ${file.name}\n\nExample:\nC:\\Projects\\firmware\\${file.name}\n\nOr click Cancel to use filename only.`,
+            `C:\\Projects\\${file.name}`
+          );
+          
+          if (userPath && userPath.trim() && userPath !== file.name) {
+            const trimmedPath = userPath.trim();
+            filePathInput.value = trimmedPath;
+            savePath(file.name, trimmedPath, fileHandle, file.size);
+            logMessage(`📁 Path updated to: ${trimmedPath}`);
+          }
+        }, 100); // Small delay to ensure file selection completes first
+        
+        finalPath = file.name;
+        logMessage(`💡 Consider entering a full path for better file management`);
+      }
+    }
+    
+    filePathInput.value = finalPath;
+    savePath(file.name, fullPath, fileHandle, file.size);
     
     logMessage(`📁 File selected: ${file.name} (${file.size} bytes)`);
-    logMessage(`✅ File validation passed - starting auto-write...`);
-    
-    // Auto-start flash write
-    const autoStartTimer = setTimeout(async () => {
-      if (currentFileHandle) {
-        await startFlashWriteFromPath();
-      }
-    }, 500);
-    
-    window.autoStartTimer = autoStartTimer;
+    logMessage(`✅ File ready for programming - click Start Programming to begin`);
     
   } catch (error) {
     if (error.name !== 'AbortError') {
@@ -1237,12 +1534,68 @@ async function handleBrowseFile() {
 
 // Write Flash Binary functionality
 async function writeFlashBinary() {
+  // Check device connection first
   if (!device || !device.opened) {
+    logCritical('❌ No USB device connected - attempting to connect...');
+    updateStatusDisplay('Connecting to device...');
+    
     device = await connectToDevice();
-    if (!device) return;
+    if (!device) {
+      logCritical('❌ Failed to connect to NXP device');
+      updateStatusDisplay('Connection failed!\nPlease:\n1. Connect LPC55S28 device via USB\n2. Click "Connect NXP Device"\n3. Try Start Programming again');
+      alert('❌ USB Connection Required!\n\nPlease connect your NXP LPC55S28 device and click "Connect NXP Device" before starting programming.');
+      return;
+    }
+    
+    logCritical('✅ Device connected successfully');
+    updateButtonStates(); // Update button states after connection
   }
   
-  showFileUpload();
+  // Verify device is still connected
+  if (!device.opened) {
+    logCritical('❌ Device connection lost');
+    updateStatusDisplay('Device disconnected!\nPlease reconnect and try again.');
+    alert('❌ Device Connection Lost!\n\nPlease reconnect your device and click "Connect NXP Device".');
+    return;
+  }
+  
+  // Smart file selection with path memory
+  if (currentFileHandle) {
+    // File already selected, proceed directly to programming
+    logCritical('🚀 Using previously selected file for programming...');
+  } else {
+    // Try to reload saved file first
+    logCritical('🔄 Attempting to reload saved file...');
+    const reloadSuccess = await tryReloadSavedFile();
+    
+    if (!reloadSuccess) {
+      // No saved file or reload failed
+      if (!filePathInput.value.trim()) {
+        // No file handle and no path, need to browse
+        logCritical('📂 Please select a binary file first');
+        await handleBrowseFile();
+        return;
+      } else {
+        // Have a path but no handle, try to get file handle from path
+        try {
+          await handleBrowseFile();
+        } catch (error) {
+          logCritical('❌ Please browse and select the file');
+          return;
+        }
+      }
+    }
+  }
+  
+  // Final verification that we have a valid file
+  if (!currentFileHandle) {
+    logCritical('❌ No file selected for programming');
+    alert('Please select a binary file before starting programming.');
+    return;
+  }
+  
+  // Start the actual flash programming
+  await startFlashWriteFromPath();
 }
 
 async function startFlashWriteFromPath() {
@@ -1250,7 +1603,7 @@ async function startFlashWriteFromPath() {
   if (!currentFileHandle) {
     logMessage('❌ No file handle available');
     logMessage('💡 Please select a binary file first');
-    showFileUpload();
+    // File path always visible
     return;
   }
   
@@ -1258,15 +1611,15 @@ async function startFlashWriteFromPath() {
     // Get fresh file reference
     const fileToWrite = await currentFileHandle.getFile();
     
-    logMessage(`🚀 Starting flash write operation for ${fileToWrite.name}...`);
-    logMessage(`📊 File size: ${fileToWrite.size} bytes`);
+    logCritical(`🚀 Starting flash write operation for ${fileToWrite.name}...`);
+    logCritical(`📊 File size: ${fileToWrite.size} bytes`);
     
     // Continue with the existing flash write logic
     await performFlashWrite(fileToWrite);
     
   } catch (error) {
-    logMessage(`❌ Failed to access file: ${error.message}`);
-    showFileUpload();
+    logCritical(`❌ Failed to access file: ${error.message}`);
+    // File path always visible
     return;
   }
 }
@@ -1329,8 +1682,8 @@ async function performFlashWrite(fileToWrite) {
     // Write the binary data
     await writeMemoryData(device, 0x00000000, binaryData);
     
-    logMessage('✅ Flash write completed successfully!');
-    logMessage(`📊 Written ${binaryData.length} bytes to flash memory`);
+    logCritical('✅ Flash write completed successfully!');
+    logCritical(`📊 Written ${binaryData.length} bytes to flash memory`);
     
     updateStatusDisplay(
       `Flash Write & Reset: SUCCESS\n\n` +
@@ -1343,22 +1696,20 @@ async function performFlashWrite(fileToWrite) {
     // Show success for a moment, then reset for next operation
     setTimeout(() => {
       hideProgress();
-      showFileUpload();
+      // File path always visible
       // Keep file path for continuous flashing - don't clear it
-      fileReady.style.display = 'none';
     }, 3000); // Show success for 3 seconds
     
   } catch (error) {
-    logMessage(`❌ Flash write failed: ${error.message}`);
+    logCritical(`❌ Flash write failed: ${error.message}`);
     updateProgress(0, 'Write failed');
     updateStatusDisplay('Flash Write: FAILED\n\nCheck logs for details.');
     
     // Show file selection again for retry
     setTimeout(() => {
       hideProgress();
-      showFileUpload();
+      // File path always visible
       // Keep file path for retry - don't clear it
-      fileReady.style.display = 'none';
     }, 2000);
   } finally {
     writeFlashBtn.disabled = false;
@@ -1368,12 +1719,20 @@ async function performFlashWrite(fileToWrite) {
 
 // WriteMemory implementation with chunked transfer
 async function writeMemoryData(device, startAddress, data) {
-  // Use dynamically detected chunk size, fallback to 44 bytes
-  const chunkSize = window.optimizedChunkSize || 44;
-  logMessage(`📊 Using ${chunkSize}-byte chunks (auto-detected optimal size)`);
-  const totalChunks = Math.ceil(data.length / chunkSize);
+  // Enable flash programming mode - completely disable logging for maximum speed
+  flashProgrammingActive = true;
+  bulkOperationMode = true;
   
-  logMessage(`📤 Writing ${data.length} bytes in ${totalChunks} chunks of ${chunkSize} bytes`);
+  try {
+    // Use dynamically detected chunk size, fallback to 44 bytes
+    const chunkSize = window.optimizedChunkSize || 44;
+    logCritical(`📊 Using ${chunkSize}-byte chunks (auto-detected optimal size)`);
+    const totalChunks = Math.ceil(data.length / chunkSize);
+    
+    logCritical(`📤 Writing ${data.length} bytes in ${totalChunks} chunks of ${chunkSize} bytes`);
+    if (logToggle && logToggle.checked) {
+      logCritical(`⚡ Logging suspended during flash programming for maximum speed`);
+    }
   
   for (let i = 0; i < data.length; i += chunkSize) {
     const chunkIndex = Math.floor(i / chunkSize);
@@ -1394,24 +1753,34 @@ async function writeMemoryData(device, startAddress, data) {
     // No delay for maximum speed - risk device instability for speed
   }
   
-  updateProgress(95, 'Write complete - resetting device...');
-  logMessage('✅ All chunks written successfully');
-  
-  // Auto-reset device after successful write
-  logMessage('🔄 Auto-resetting device to run new firmware...');
-  const resetSuccess = await performAutoReset(device);
-  if (resetSuccess) {
-    updateProgress(100, 'Complete & Reset!');
-    logMessage('✅ Device reset successfully - new firmware should be running');
-  } else {
-    updateProgress(100, 'Write completed!');
-    logMessage('⚠️ Auto-reset failed - you can manually reset the device');
+    updateProgress(95, 'Write complete - resetting device...');
+    logCritical('✅ All chunks written successfully');
+    
+    // Auto-reset device after successful write
+    logCritical('🔄 Auto-resetting device to run new firmware...');
+    const resetSuccess = await performAutoReset(device);
+    if (resetSuccess) {
+      updateProgress(100, 'Complete & Reset!');
+      logCritical('✅ Device reset successfully - new firmware should be running');
+    } else {
+      updateProgress(100, 'Write completed!');
+      logCritical('⚠️ Auto-reset failed - you can manually reset the device');
+    }
+  } finally {
+    // Always disable flash programming mode and bulk operation mode
+    flashProgrammingActive = false;
+    bulkOperationMode = false;
+    
+    // Notify that logging has resumed
+    if (logToggle && logToggle.checked) {
+      logCritical(`📝 Logging resumed - flash programming complete`);
+    }
   }
 }
 
-// Write a single memory chunk
+// Write a single memory chunk with retry mechanism
 async function writeMemoryChunk(device, address, data) {
-  try {
+  return await withRetry(async () => {
     // Prepare WriteMemory command parameters
     const params = new Uint8Array(12);
     
@@ -1460,11 +1829,7 @@ async function writeMemoryChunk(device, address, data) {
     await sendDataPacketNoResponse(device, dataPacket);
     
     return true;
-    
-  } catch (error) {
-    logMessage(`❌ WriteMemory chunk error: ${error.message}`);
-    return false;
-  }
+  }, 2, 50, `Write chunk @0x${address.toString(16)}`, true); // Suppress retry logs for chunk writes
 }
 
 // Encode data packet for WriteMemory data phase
@@ -1487,30 +1852,22 @@ function encodeDataPacket(data) {
 
 // Send data packet with no response expected
 async function sendDataPacketNoResponse(device, packet) {
-  try {
-    const reportId = packet[0];
+  const reportId = packet[0];
+  return await withRetry(async () => {
     const dataToSend = packet.slice(1);
-    
     await device.sendReport(reportId, dataToSend);
     // Suppress logging during bulk write operations for performance
-  } catch (error) {
-    logMessage(`❌ Error sending data packet: ${error.message}`);
-    throw error;
-  }
+  }, 3, 50, `Data packet 0x${reportId.toString(16)}`, true); // Suppress retry logs for data packets
 }
 
 // Send data packet (legacy function - keep for compatibility)
 async function sendDataPacket(device, packet) {
-  try {
-    const reportId = packet[0];
+  const reportId = packet[0];
+  return await withRetry(async () => {
     const dataToSend = packet.slice(1);
-    
     await device.sendReport(reportId, dataToSend);
     return { status: 0 };
-  } catch (error) {
-    logMessage(`❌ Error sending data packet: ${error.message}`);
-    return null;
-  }
+  }, 3, 50, `Data packet 0x${reportId.toString(16)}`, true); // Suppress retry logs for data packets
 }
 
 // Auto-reset device after successful write (no confirmation)
@@ -1603,40 +1960,23 @@ filePathInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') {
     const path = filePathInput.value.trim();
     if (path) {
+      // Save the full path when user manually types it
+      const lastSlash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+      if (lastSlash > 0) {
+        const filename = path.substring(lastSlash + 1);
+        savePath(filename, path);
+      } else {
+        savePath(path);
+      }
       handleFilePath(path);
     }
   }
 });
 
-cancelWriteBtn.addEventListener('click', () => {
-  // Cancel auto-start timer if still pending
-  if (window.autoStartTimer) {
-    clearTimeout(window.autoStartTimer);
-    window.autoStartTimer = null;
-    logMessage('⏹️ Auto-start cancelled by user');
-  }
-  
-  // Don't clear file path - keep it for next use
-  currentFileHandle = null;
-  hideFileUpload();
-});
+// Cancel write button removed - no longer needed in new interface
 
 // Legacy drag and drop support (now opens file picker)
-fileUploadSection.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  fileUploadSection.style.backgroundColor = '#e9ecef';
-});
-
-fileUploadSection.addEventListener('dragleave', () => {
-  fileUploadSection.style.backgroundColor = '';
-});
-
-fileUploadSection.addEventListener('drop', (e) => {
-  e.preventDefault();
-  fileUploadSection.style.backgroundColor = '';
-  logMessage('📁 Drag & drop detected - opening file picker...');
-  handleBrowseFile(); // Open file picker instead of direct file access
-});
+// Drag and drop removed - file path input is always visible
 
 fullDiagnosticBtn.addEventListener('click', fullDeviceDiagnostic);
 eraseFlashBtn.addEventListener('click', eraseFlashMemory);
@@ -1698,8 +2038,11 @@ async function autoDetectDevice() {
       updateStatusDisplay('LPC55S28 device auto-connected!\nRunning device test...');
       
       // Update connect button
-      connectBtn.textContent = '✅ Connected';
-      connectBtn.disabled = true;
+      connectBtn.textContent = '🔄 Re-Connect';
+      connectBtn.disabled = false;
+      
+      // Update button states now that device is connected
+      updateButtonStates();
       
       // Auto-run full diagnostic immediately
       logMessage('🚀 Auto-running full device diagnostic...');
@@ -1725,6 +2068,10 @@ async function autoDetectDevice() {
 // Enhanced auto-connection on page load
 document.addEventListener('DOMContentLoaded', () => {
   logMessage('🌟 Page loaded - attempting auto-connection...');
+  
+  // Initialize button states (device not connected initially)
+  updateButtonStates();
+  
   setTimeout(autoDetectDevice, 50); // Faster response
   
   // Load saved file path

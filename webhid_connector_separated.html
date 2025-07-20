@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LPC55S28 WebHID Connector</title>
+  <title>NXP USB ISP Programming Tool</title>
   <style>
     body {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -210,41 +210,32 @@
 </head>
 <body>
   <div class="container">
-    <h1>🔌 LPC55S28 WebHID Connector</h1>
+    <h1>🔧 NXP USB ISP Programming Tool</h1>
     
 
     <div class="button-group">
       <button id="connectBtn">🔌 Connect NXP Device</button>
       <button id="fullDiagnosticBtn">🔍 Full Device Diagnostic</button>
       <button id="eraseFlashBtn" class="danger-btn">🗑️ Erase Flash</button>
-      <button id="writeFlashBtn" class="primary-btn">📤 Write Flash Binary</button>
+      <button id="writeFlashBtn" class="primary-btn">🚀 Start Programming</button>
       <button id="resetDeviceBtn" class="secondary-btn">🔄 Reset Device</button>
     </div>
 
-    <div class="file-upload-section" id="fileUploadSection" style="display: none;">
-      <div class="upload-area">
-        <div class="path-input-section">
-          <h4>📂 Binary File Path</h4>
-          <div class="path-input-group">
-            <input type="text" id="filePathInput" placeholder="Enter full path to binary file (e.g., C:\path\to\file.bin)" 
-                   style="flex: 1; padding: 0.75rem; font-size: 1rem; border: 2px solid #007acc; border-radius: 5px; margin-right: 0.5rem;">
-            <button id="browseFileBtn" style="padding: 0.75rem 1rem; background-color: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">📁 Browse</button>
-          </div>
-          <div class="path-info" style="margin-top: 0.5rem;">
-            <p class="file-info">Supported formats: .bin, .hex, .elf</p>
-            <p class="file-info" style="color: #007acc; font-weight: bold;">⚡ Auto-starts after path input</p>
-          </div>
-        </div>
-        <div class="file-ready" id="fileReady" style="display: none; text-align: center; padding: 1rem;">
-          <p>✅ File ready: <span id="readyFileName"></span></p>
-          <p>📊 Size: <span id="readyFileSize"></span> bytes</p>
-          <p style="color: #28a745; font-weight: bold;">⚡ Auto-starting flash write...</p>
-          <button id="cancelWriteBtn" style="margin-top: 0.5rem;">❌ Cancel</button>
-        </div>
+    <!-- Always visible file path section -->
+    <div class="file-path-section">
+      <h4>📂 Binary File Path</h4>
+      <div class="path-input-group">
+        <input type="text" id="filePathInput" placeholder="Enter filename or click Browse to select binary file" 
+               style="flex: 1; padding: 0.75rem; font-size: 1rem; border: 2px solid #007acc; border-radius: 5px; margin-right: 0.5rem;">
+        <button id="browseFileBtn" style="padding: 0.75rem 1rem; background-color: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">📁 Browse</button>
+      </div>
+      <div class="path-info" style="margin-top: 0.5rem;">
+        <p class="file-info">Supported formats: .bin, .hex, .elf | Ready for programming when path is set</p>
       </div>
     </div>
 
-    <div class="progress-section" id="progressSection" style="display: none;">
+    <!-- Always visible progress section -->
+    <div class="progress-section">
       <div class="progress-container">
         <div class="progress-bar">
           <div class="progress-fill" id="progressFill"></div>
