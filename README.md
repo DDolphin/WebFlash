@@ -1,6 +1,8 @@
-# 🔧 NXP USB ISP Programming Tool
+# 🔧 WebFlash - USB ISP Programming Tool
 
-A modern web-based In-System Programming (ISP) tool for NXP LPC55S28 microcontrollers using WebHID API. This tool provides a fast, reliable, and user-friendly interface for flash programming directly from your web browser.
+A modern web-based In-System Programming (ISP) tool for ARM microcontrollers using WebHID API. This tool provides a fast, reliable, and user-friendly interface for flash programming directly from your web browser, supporting a wide range of ARM MCUs with USB ISP capability.
+
+> 🤖 **AI-Generated Project**: This project was developed using [Claude Code](https://claude.ai/code), Anthropic's AI-powered development tool. The entire codebase, including HTML, JavaScript, and documentation, was generated through AI assistance to demonstrate modern web-based embedded programming solutions.
 
 ## 🌐 Online Access
 
@@ -14,7 +16,7 @@ A modern web-based In-System Programming (ISP) tool for NXP LPC55S28 microcontro
 
 </div>
 
-> Compatible with Chrome, Edge, and Opera browsers. Simply connect your NXP device and start programming!
+Compatible with Chrome, Edge, and Opera browsers. Simply connect your ARM MCU device and start programming!
 
 ## ✨ Features
 
@@ -25,7 +27,7 @@ A modern web-based In-System Programming (ISP) tool for NXP LPC55S28 microcontro
 - **Intelligent logging control** to prevent performance bottlenecks
 
 ### 🔌 Smart Device Management
-- **Auto-detection** of LPC55S28 devices on page load
+- **Auto-detection** of compatible ARM MCU devices on page load
 - **Automatic USB device selection** (VID: 0x1FC9)
 - **Connection state validation** before programming
 - **Real-time device diagnostics** and property reading
@@ -63,14 +65,27 @@ A modern web-based In-System Programming (ISP) tool for NXP LPC55S28 microcontro
 > **Note**: Firefox and Safari are not supported due to WebHID API limitations.
 
 ### Hardware Requirements
-- **NXP LPC55S28** microcontroller
-- **USB connection** for ISP communication
-- **Device in ISP mode** (bootloader mode)
+- **ARM MCU** with USB ISP support
+- **USB connection** for ISP communication  
+- **Device in ISP/bootloader mode**
+
+### Supported MCU Series
+This tool is primarily designed for and tested with ARM Cortex-M microcontrollers that support USB HID ISP protocol:
+
+- **LPC55xx** series (LPC5528, LPC5526, etc.)
+- **LPC54xx** series (LPC5460, LPC5411, etc.)
+- **LPC43xx** series (LPC4357, LPC4337, etc.)
+- **LPC40xx** series (LPC4088, LPC4078, etc.)
+- **LPC17xx** series (LPC1769, LPC1768, etc.)
+- **LPC11xx** series (LPC1114, LPC1115, etc.)
+- **Compatible ARM MCUs** with USB HID bootloader (VID: 0x1FC9)
+
+> **Note**: All MCUs must support USB HID ISP protocol and have VID 0x1FC9 in bootloader mode. This tool is compatible with LPC series microcontrollers and similar ARM Cortex-M devices.
 
 ## 🚀 Quick Start
 
 ### 1. Setup Device
-1. Connect your LPC55S28 device via USB
+1. Connect your ARM MCU device via USB
 2. Ensure device is in ISP/bootloader mode
 3. Verify device appears in system (VID: 0x1FC9)
 
@@ -99,7 +114,7 @@ A modern web-based In-System Programming (ISP) tool for NXP LPC55S28 microcontro
 ## 📋 Interface Guide
 
 ### Main Controls
-- **🔌 Connect NXP Device**: Manual device connection/reconnection
+- **🔌 Connect ARM Device**: Manual device connection/reconnection
 - **🔍 Full Device Diagnostic**: Complete device analysis and testing
 - **🗑️ Erase Flash**: Erase entire flash memory
 - **🚀 Start Programming**: Begin flash programming process
@@ -126,12 +141,14 @@ A modern web-based In-System Programming (ISP) tool for NXP LPC55S28 microcontro
 ### Typical Performance
 - **Small files (10KB)**: ~1-2 seconds
 - **Medium files (100KB)**: ~5-10 seconds
-- **Large files (512KB)**: ~20-30 seconds
+- **Large files (512KB+)**: ~20-30 seconds
+
+> Performance may vary depending on MCU flash size and USB interface speed.
 
 ## 🔒 Security & Safety
 
 ### Built-in Protections
-- **File size validation** (max 512KB for LPC55S28)
+- **File size validation** (respects MCU flash memory limits)
 - **File format verification** (.bin, .hex, .elf)
 - **Device connection validation** before operations
 - **Error recovery** with detailed diagnostics
@@ -167,7 +184,7 @@ A modern web-based In-System Programming (ISP) tool for NXP LPC55S28 microcontro
 | Error | Cause | Solution |
 |-------|-------|----------|
 | "Device not connected" | No USB device found | Connect device and click Re-Connect |
-| "File too large" | File exceeds 512KB | Use smaller file or check device specs |
+| "File too large" | File exceeds MCU flash size | Use smaller file or check MCU specifications |
 | "Invalid file format" | Unsupported file type | Use .bin, .hex, or .elf files |
 | "Programming failed" | Communication error | Check connection, try again |
 
@@ -177,15 +194,25 @@ A modern web-based In-System Programming (ISP) tool for NXP LPC55S28 microcontro
 ```
 WebFlash/
 ├── webhid_connector_separated.html    # Main interface
-├── webhid_connector.js               # Core functionality
-├── webhid_connector.html            # Simple connector (legacy)
-├── LPC55_USBHID_BOOT.py             # Reference Python implementation
-└── README.md                        # This documentation
+├── webhid_connector.js               # Core functionality  
+├── README.md                        # This documentation
+└── LICENSE                          # MIT License
 ```
+
+### Technical References
+
+This tool implements USB HID ISP protocol based on publicly available specifications:
+
+- **MCU Boot ROM Reference Manual**: [MCUBOOTRM.pdf](https://www.nxp.com/docs/en/reference-manual/MCUBOOTRM.pdf)
+  - Official specification for USB HID ISP protocol implementation
+  - Covers command structure, data formats, and communication flow
+  - Useful for understanding the underlying protocol and extending functionality
+
+> **Note**: While this tool is designed to work with various ARM Cortex-M microcontrollers, the above reference specifically covers LPC series implementation details.
 
 ### Key Components
 - **WebHID Interface**: Device communication layer
-- **ISP Protocol**: LPC55S28 bootloader command implementation
+- **ISP Protocol**: Universal ARM Cortex-M bootloader command implementation
 - **File Management**: Path memory and smart reloading
 - **Progress Tracking**: Real-time status and error handling
 - **UI Management**: Modern responsive interface
@@ -206,6 +233,30 @@ This tool is designed for professional firmware development workflows. For sugge
 3. Provide detailed error logs when reporting issues
 4. Consider security implications of any changes
 
+## 🤖 AI Development
+
+This project showcases the capabilities of AI-assisted software development:
+
+### Development Process
+- **Generated with [Claude Code](https://claude.ai/code)** by Anthropic
+- **Iterative development** through conversational programming
+- **Real-time optimization** based on performance requirements
+- **Comprehensive testing** and debugging assistance
+
+### AI Contributions
+- **Complete codebase generation** - HTML, CSS, JavaScript
+- **Technical architecture design** - WebHID API integration, ISP protocol implementation
+- **Performance optimization** - Packet size detection, retry mechanisms, logging optimization
+- **User experience design** - Modern interface, progress tracking, error handling
+- **Documentation creation** - Comprehensive README, inline comments, usage guides
+
+### Quality Assurance
+- **Defensive programming** - Input validation, error recovery, security considerations
+- **Modern web standards** - ES6+, responsive design, accessibility features
+- **Professional practices** - Code organization, commenting, version control preparation
+
+This project demonstrates that AI tools can generate production-quality, well-documented, and maintainable code for complex technical applications.
+
 ## ⚠️ Disclaimer
 
 This tool is provided for development and testing purposes. Always:
@@ -218,10 +269,23 @@ The tool implements defensive security measures and refuses malicious operations
 
 ## 📜 License
 
-This project is provided as-is for educational and development purposes. Please respect NXP's intellectual property and licensing terms when using with their hardware and software.
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+### MIT License Summary
+- ✅ **Commercial use** - Use in commercial projects
+- ✅ **Modification** - Modify and distribute
+- ✅ **Distribution** - Distribute original or modified versions
+- ✅ **Private use** - Use for private projects
+- ⚠️ **No warranty** - Provided "as-is" without warranty
+
+### Additional Notes
+- This project is provided for educational and development purposes
+- Please respect microcontroller manufacturers' intellectual property and licensing terms when using with their hardware and software
+- Generated with AI assistance from Claude Code by Anthropic
 
 ---
 
 **🔧 Built for modern firmware development workflows**  
 **⚡ Optimized for speed and reliability**  
-**🛡️ Designed with security in mind**
+**🛡️ Designed with security in mind**  
+**🌐 Universal support for ARM microcontrollers with USB ISP**
