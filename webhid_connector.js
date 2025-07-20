@@ -1997,45 +1997,36 @@ async function performFlashWrite(fileToWrite) {
 // Extracted flash write operation for retry functionality
 async function performFlashWriteOperation(arrayBuffer, systemState) {
   // Start the writing process
-  updateProgress(5, 'Checking device...');
+  updateProgress(5, 'Checking device state...');
   
-  // Test device communication first
-  await testDeviceRead(device);
+  // Check lifecycle state
+  const lifecycleResult = await getProperty(device, 0x11, 0x00);
+  if (lifecycleResult && lifecycleResult.success) {
+    if (!lifecycleResult.value.includes('Development')) {
+      logCritical('⚠️ Device not in Development mode - attempting to unlock...');
+      await flashSecurityDisable(device);
+    } else {
+      logCritical('✅ Device is in Development mode');
+    }
+  }
   
   updateProgress(10, 'Erasing flash...');
-  
-  // Check device development mode
-  const devMode = await checkDevelopmentMode(device);
-  if (devMode) {
-    logCritical('✅ Device is in Development mode');
-  } else {
-    logCritical('⚠️ Device may not be in Development mode');
-  }
   
   // Perform flash erase
   logCritical('🗑️ Erasing flash before writing...');
   
-  // Try FlashEraseAllUnsecure first (if available), then fallback to FlashEraseAll
-  let eraseSuccess = false;
-  try {
-    logCritical('📤 Sending FlashEraseAllUnsecure command...');
-    const eraseResult = await flashEraseAllUnsecure(device);
-    if (eraseResult) {
-      logCritical('✅ FlashEraseAllUnsecure completed successfully');
-      eraseSuccess = true;
-    }
-  } catch (eraseError) {
-    logCritical(`❌ FlashEraseAllUnsecure failed: ${eraseError.message}`);
-  }
-  
-  if (!eraseSuccess) {
+  // Try FlashEraseAllUnsecure first, then fallback to FlashEraseAll
+  logCritical('📤 Sending FlashEraseAllUnsecure command...');
+  const eraseResult = await flashEraseAllUnsecure(device);
+  if (!eraseResult) {
     logCritical('📤 Sending FlashEraseAll command (Memory ID: 0x0)...');
-    const eraseResult = await flashEraseAll(device, 0x0); // Memory ID 0x0 for internal flash
-    if (eraseResult) {
-      logCritical('✅ FlashEraseAll completed successfully');
-    } else {
+    const eraseResult2 = await flashEraseAll(device, 0x0);
+    if (!eraseResult2) {
       throw new Error('Flash erase failed');
     }
+    logCritical('✅ FlashEraseAll completed successfully');
+  } else {
+    logCritical('✅ FlashEraseAllUnsecure completed successfully');
   }
   
   updateProgress(20, 'Writing firmware...');
